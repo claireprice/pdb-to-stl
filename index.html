@@ -2,80 +2,98 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Optimized PDB Viewer</title>
+  <title>Optimized PDB Viewer with Ribbon</title>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/STLExporter.js"></script>
   <style>
-    body { margin: 0; overflow: hidden; background: #000; color: #fff; font-family: sans-serif; }
+    body { margin: 0; overflow: hidden; font-family: sans-serif; background: #111; color: #eee; }
     #controls {
       position: absolute;
       top: 10px; left: 10px;
-      background: rgba(0,0,0,0.85);
+      background: rgba(0, 0, 0, 0.85);
       padding: 12px;
       border-radius: 8px;
-      z-index: 1;
-      width: 300px;
+      z-index: 10;
+      width: 320px;
     }
     input, button {
       width: 100%;
       margin: 5px 0;
       padding: 5px;
-      background: #111;
+      background: #222;
       color: #fff;
       border: 1px solid #333;
       border-radius: 4px;
     }
-    #loadingMsg {
+    label { font-size: 14px; display: block; margin-top: 5px; }
+    #loading {
       position: absolute;
       top: 50%; left: 50%;
       transform: translate(-50%, -50%);
-      color: white;
-      background: rgba(0,0,0,0.75);
-      padding: 20px;
+      color: #fff;
+      font-size: 18px;
+      background: rgba(0,0,0,0.7);
+      padding: 10px 20px;
       border-radius: 10px;
       display: none;
-      font-size: 18px;
+      z-index: 20;
     }
   </style>
 </head>
 <body>
   <div id="controls">
     <input type="file" id="pdbFile" />
-    <input type="text" id="pdbUrl" placeholder="Paste raw PDB URL" />
+    <input type="text" id="pdbUrl" placeholder="Paste PDB file URL here" />
     <button onclick="loadPDBfromURL()">Load from URL</button>
+    <button onclick="exportSTL()">Export STL</button>
+    <label><input type="checkbox" id="performanceMode"> Performance Mode (CA atoms only)</label>
+    <label><input type="checkbox" id="showAtoms" checked> Show Atoms</label>
+    <label><input type="checkbox" id="showBonds" checked> Show Bonds</label>
+    <label><input type="checkbox" id="showRibbon" checked> Show Ribbon</label>
+    <label>Bond Distance: <input type="range" id="bondThreshold" min="1" max="2" step="0.1" value="1.6"></label>
   </div>
-  <div id="loadingMsg">Loading structure... please wait</div>
+  <div id="loading">Loading PDB file...</div>
 
   <script>
     let scene, camera, renderer, controls;
-    let instancedMesh;
-    const MAX_ATOMS = 100000;
+    let atomMeshes = [], bondMeshes = [], ribbonMesh = null;
+    let currentAtoms = [], caAtoms = [];
 
     init();
 
     function init() {
       scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(70, window.innerWidth / window.innerHeight, 1, 2000);
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
       camera.position.z = 100;
 
       renderer = new THREE.WebGLRenderer({ antialias: true });
       renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setClearColor(0x000000);
+      renderer.setClearColor(0x111111);
       document.body.appendChild(renderer.domElement);
 
       controls = new THREE.OrbitControls(camera, renderer.domElement);
+
       window.addEventListener('resize', () => {
         camera.aspect = window.innerWidth / window.innerHeight;
         camera.updateProjectionMatrix();
         renderer.setSize(window.innerWidth, window.innerHeight);
       });
 
-      document.getElementById("pdbFile").addEventListener("change", (event) => {
+      document.getElementById("pdbFile").addEventListener("change", function (event) {
         const file = event.target.files[0];
         const reader = new FileReader();
-        reader.onload = (e) => parsePDB(e.target.result);
+        reader.onload = function (e) {
+          parsePDB(e.target.result);
+        };
         reader.readAsText(file);
       });
+
+      document.getElementById("showAtoms").onchange =
+      document.getElementById("showBonds").onchange =
+      document.getElementById("showRibbon").onchange =
+      document.getElementById("bondThreshold").oninput =
+      document.getElementById("performanceMode").onchange = renderStructure;
 
       animate();
     }
@@ -86,66 +104,132 @@
       renderer.render(scene, camera);
     }
 
-    function loadPDBfromURL() {
-      const url = document.getElementById("pdbUrl").value;
-      showLoading(true);
-      fetch(url)
-        .then(res => {
-          if (!res.ok) throw new Error("Failed to fetch PDB");
-          return res.text();
-        })
-        .then(text => {
-          showLoading(false);
-          parsePDB(text);
-        })
-        .catch(err => {
-          showLoading(false);
-          alert("Error loading PDB: " + err.message);
-        });
+    function getColorForElement(el) {
+      const colors = {
+        H: 0xffffff, C: 0xaaaaaa, O: 0xff0000, N: 0x00ccff,
+        S: 0xffff00, P: 0xff8000, Cl: 0x00ff00, F: 0x00ffff
+      };
+      return new THREE.Color(colors[el] || 0xff00ff);
+    }
+
+    function getAtomRadius(el) {
+      const radii = {
+        H: 0.25, C: 0.7, N: 0.65, O: 0.6, S: 1.0, P: 1.1, Cl: 1.0, F: 0.5
+      };
+      return radii[el] || 0.8;
     }
 
     function parsePDB(text) {
+      document.getElementById("loading").style.display = "block";
       scene.clear();
-      const atoms = [];
+      atomMeshes = []; bondMeshes = []; ribbonMesh = null;
+      currentAtoms = []; caAtoms = [];
+
       const lines = text.split('\n');
       for (const line of lines) {
-        if ((line.startsWith("ATOM") || line.startsWith("HETATM")) && line.substring(12,16).trim() === 'CA') {
+        if (line.startsWith("ATOM") || line.startsWith("HETATM")) {
           const x = parseFloat(line.substring(30, 38));
           const y = parseFloat(line.substring(38, 46));
           const z = parseFloat(line.substring(46, 54));
-          atoms.push({ x, y, z });
+          const element = line.substring(76, 78).trim();
+          const name = line.substring(12, 16).trim();
+          const resSeq = line.substring(22, 26).trim();
+          const atom = { x, y, z, element, name, resSeq };
+          currentAtoms.push(atom);
+          if (name === "CA") caAtoms.push(atom);
         }
       }
 
-      if (atoms.length > MAX_ATOMS) {
-        alert("Too many atoms! Consider a smaller structure.");
-        return;
-      }
-
-      const geometry = new THREE.SphereGeometry(0.6, 8, 8);
-      const material = new THREE.MeshBasicMaterial({ color: 0x00ccff });
-      instancedMesh = new THREE.InstancedMesh(geometry, material, atoms.length);
-
-      const dummy = new THREE.Object3D();
-      for (let i = 0; i < atoms.length; i++) {
-        dummy.position.set(atoms[i].x, atoms[i].y, atoms[i].z);
-        dummy.updateMatrix();
-        instancedMesh.setMatrixAt(i, dummy.matrix);
-      }
-
-      scene.add(instancedMesh);
-      addLights();
+      if (currentAtoms.length > 50000) alert("⚠️ This is a large file and may cause lag.");
+      renderStructure();
+      document.getElementById("loading").style.display = "none";
     }
 
-    function showLoading(show) {
-      document.getElementById("loadingMsg").style.display = show ? "block" : "none";
+    function renderStructure() {
+      scene.clear();
+      atomMeshes = []; bondMeshes = []; ribbonMesh = null;
+
+      const usePerf = document.getElementById("performanceMode").checked;
+      const showAtoms = document.getElementById("showAtoms").checked;
+      const showBonds = document.getElementById("showBonds").checked;
+      const showRibbon = document.getElementById("showRibbon").checked;
+      const bondThreshold = parseFloat(document.getElementById("bondThreshold").value);
+      const atoms = usePerf ? caAtoms : currentAtoms;
+
+      if (showAtoms) {
+        const geometry = new THREE.SphereGeometry(0.5, 8, 8);
+        atoms.forEach(a => {
+          const mat = new THREE.MeshPhongMaterial({ color: getColorForElement(a.element) });
+          const sphere = new THREE.Mesh(geometry, mat);
+          sphere.position.set(a.x, a.y, a.z);
+          scene.add(sphere);
+          atomMeshes.push(sphere);
+        });
+      }
+
+      if (!usePerf && showBonds) {
+        for (let i = 0; i < atoms.length; i++) {
+          for (let j = i + 1; j < atoms.length; j++) {
+            const a = atoms[i], b = atoms[j];
+            const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist < bondThreshold) {
+              const mid = new THREE.Vector3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+              const dir = new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z);
+              const length = dir.length();
+              const bond = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.2, 0.2, length, 8),
+                new THREE.MeshPhongMaterial({ color: 0x999999 })
+              );
+              bond.position.copy(mid);
+              bond.lookAt(new THREE.Vector3(b.x, b.y, b.z));
+              bond.rotateX(Math.PI / 2);
+              scene.add(bond);
+              bondMeshes.push(bond);
+            }
+          }
+        }
+      }
+
+      if (showRibbon && caAtoms.length >= 4) {
+        const points = caAtoms.map(a => new THREE.Vector3(a.x, a.y, a.z));
+        const curve = new THREE.CatmullRomCurve3(points);
+        const geometry = new THREE.TubeGeometry(curve, 100, 0.5, 8, false);
+        const material = new THREE.MeshPhongMaterial({ color: 0xff66cc, opacity: 0.7, transparent: true });
+        ribbonMesh = new THREE.Mesh(geometry, material);
+        scene.add(ribbonMesh);
+      }
+
+      addLights();
     }
 
     function addLights() {
       scene.add(new THREE.AmbientLight(0x404040));
-      const light = new THREE.DirectionalLight(0xffffff, 1);
-      light.position.set(1, 1, 1).normalize();
-      scene.add(light);
+      const directional = new THREE.DirectionalLight(0xffffff, 1);
+      directional.position.set(1, 1, 1).normalize();
+      scene.add(directional);
+    }
+
+    function loadPDBfromURL() {
+      const url = document.getElementById("pdbUrl").value;
+      document.getElementById("loading").style.display = "block";
+      fetch(url)
+        .then(res => res.text())
+        .then(text => parsePDB(text))
+        .catch(err => {
+          alert("Failed to load PDB: " + err);
+          document.getElementById("loading").style.display = "none";
+        });
+    }
+
+    function exportSTL() {
+      const exporter = new THREE.STLExporter();
+      const stl = exporter.parse(scene);
+      const blob = new Blob([stl], { type: 'text/plain' });
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = 'protein_model.stl';
+      link.click();
     }
   </script>
 </body>
