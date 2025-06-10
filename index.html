@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Optimized PDB Viewer with Ribbon</title>
+  <title>Optimized PDB Viewer with Ribbon Thickness</title>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/STLExporter.js"></script>
@@ -51,6 +51,7 @@
     <label><input type="checkbox" id="showAtoms" checked> Show Atoms</label>
     <label><input type="checkbox" id="showBonds" checked> Show Bonds</label>
     <label><input type="checkbox" id="showRibbon" checked> Show Ribbon</label>
+    <label>Ribbon Thickness: <input type="range" id="ribbonThickness" min="0.1" max="2.0" step="0.1" value="0.5"></label>
     <label>Bond Distance: <input type="range" id="bondThreshold" min="1" max="2" step="0.1" value="1.6"></label>
   </div>
   <div id="loading">Loading PDB file...</div>
@@ -93,6 +94,7 @@
       document.getElementById("showBonds").onchange =
       document.getElementById("showRibbon").onchange =
       document.getElementById("bondThreshold").oninput =
+      document.getElementById("ribbonThickness").oninput =
       document.getElementById("performanceMode").onchange = renderStructure;
 
       animate();
@@ -154,6 +156,7 @@
       const showBonds = document.getElementById("showBonds").checked;
       const showRibbon = document.getElementById("showRibbon").checked;
       const bondThreshold = parseFloat(document.getElementById("bondThreshold").value);
+      const ribbonThickness = parseFloat(document.getElementById("ribbonThickness").value);
       const atoms = usePerf ? caAtoms : currentAtoms;
 
       if (showAtoms) {
@@ -194,7 +197,7 @@
       if (showRibbon && caAtoms.length >= 4) {
         const points = caAtoms.map(a => new THREE.Vector3(a.x, a.y, a.z));
         const curve = new THREE.CatmullRomCurve3(points);
-        const geometry = new THREE.TubeGeometry(curve, 100, 0.5, 8, false);
+        const geometry = new THREE.TubeGeometry(curve, 100, ribbonThickness, 8, false);
         const material = new THREE.MeshPhongMaterial({ color: 0xff66cc, opacity: 0.7, transparent: true });
         ribbonMesh = new THREE.Mesh(geometry, material);
         scene.add(ribbonMesh);
