@@ -17,18 +17,11 @@
     #controls {
       position: absolute;
       top: 10px; left: 10px;
-      background: rgba(0, 0, 0, 0.8);
+      background: rgba(0, 0, 0, 0.85);
       padding: 12px;
       border-radius: 8px;
       z-index: 10;
       width: 300px;
-    }
-    #instructions {
-      font-size: 12px;
-      margin-top: 10px;
-      background: #222;
-      padding: 8px;
-      border-radius: 6px;
     }
     input, button {
       width: 100%;
@@ -46,13 +39,24 @@
     input[type="range"] {
       width: 100%;
     }
+    #instructions {
+      font-size: 12px;
+      margin-top: 10px;
+      background: #222;
+      padding: 8px;
+      border-radius: 6px;
+    }
+    #status {
+      font-size: 13px;
+      color: #00ccff;
+      padding: 4px 0;
+      min-height: 1em;
+    }
   </style>
 </head>
 <body>
   <div id="controls">
     <input type="file" id="pdbFile" />
-    <input type="text" id="pdbId" placeholder="Enter PDB ID (e.g. 1CRN)" />
-    <button onclick="loadPDBbyId()">Load by ID</button>
     <input type="text" id="pdbUrl" placeholder="Paste raw PDB file URL here" />
     <button onclick="loadPDBfromURL()">Load from URL</button>
     <button onclick="exportSTL()">Export STL</button>
@@ -64,11 +68,12 @@
       <input type="range" id="bondThreshold" min="1" max="2" step="0.1" value="1.6">
     </label>
 
+    <div id="status"></div>
+
     <div id="instructions">
-      🧬 To load a file by ID, enter a valid PDB ID like <code>1CRN</code><br>
-      The raw URL format is:<br>
-      <code>https://files.rcsb.org/view/XXXX.pdb</code><br>
-      Replace <code>XXXX</code> with your PDB ID.
+      🧬 Paste a raw .pdb file link (like <br>
+      <code>https://files.rcsb.org/view/1CRN.pdb</code>) and click "Load from URL".<br>
+      File upload also works.
     </div>
   </div>
 
@@ -90,7 +95,6 @@
       document.body.appendChild(renderer.domElement);
 
       controls = new THREE.OrbitControls(camera, renderer.domElement);
-
       addLights();
       animate();
 
@@ -103,7 +107,6 @@
         reader.readAsText(file);
       });
 
-      // UI change handlers
       document.getElementById("showAtoms").onchange =
       document.getElementById("showBonds").onchange =
       document.getElementById("showRibbon").onchange =
@@ -134,6 +137,7 @@
     function parsePDB(text) {
       scene.clear();
       atomMeshes = []; bondMeshes = []; ribbonMesh = null; currentAtoms = [];
+      setStatus("");
 
       const lines = text.split("\\n");
       for (const line of lines) {
@@ -212,27 +216,25 @@
 
     function loadPDBfromURL() {
       const url = document.getElementById("pdbUrl").value;
+      if (!url) {
+        alert("Please paste a raw PDB file URL.");
+        return;
+      }
+      setStatus("🔄 Loading PDB file…");
       fetch(url)
         .then(res => {
           if (!res.ok) throw new Error("File not found");
           return res.text();
         })
         .then(text => parsePDB(text))
-        .catch(err => alert("Failed to load PDB: " + err));
-    }
-
-    function loadPDBbyId() {
-      const id = document.getElementById("pdbId").value.trim().toUpperCase();
-      if (!id || id.length !== 4) {
-        alert("Please enter a valid 4-letter PDB ID like '1CRN'.");
-        return;
-      }
-      const url = `https://files.rcsb.org/view/${id}.pdb`;
-      document.getElementById("pdbUrl").value = url;
-      loadPDBfromURL();
+        .catch(err => setStatus("❌ Failed to load PDB: " + err.message));
     }
 
     function exportSTL() {
+      if (!scene || scene.children.length === 0) {
+        alert("Nothing to export yet!");
+        return;
+      }
       const exporter = new THREE.STLExporter();
       const stl = exporter.parse(scene);
       const blob = new Blob([stl], { type: 'text/plain' });
@@ -240,6 +242,10 @@
       link.href = URL.createObjectURL(blob);
       link.download = 'protein_model.stl';
       link.click();
+    }
+
+    function setStatus(msg) {
+      document.getElementById("status").textContent = msg;
     }
 
     function addLights() {
