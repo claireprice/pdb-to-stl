@@ -2,71 +2,212 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>PDB Viewer with STL Export</title>
+  <title>PDB Viewer (Dark Mode)</title>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/STLExporter.js"></script>
   <style>
-    body { margin: 0; overflow: hidden; font-family: sans-serif; }
+    body {
+      margin: 0;
+      overflow: hidden;
+      background: #111;
+      color: #eee;
+      font-family: sans-serif;
+    }
     #controls {
       position: absolute;
       top: 10px; left: 10px;
-      background: rgba(255, 255, 255, 0.95);
-      padding: 10px;
+      background: rgba(0, 0, 0, 0.8);
+      padding: 12px;
       border-radius: 8px;
-      z-index: 1;
-      max-width: 400px;
+      z-index: 10;
+      width: 300px;
     }
     #instructions {
       font-size: 12px;
       margin-top: 10px;
-      background: #f0f0f0;
+      background: #222;
       padding: 8px;
       border-radius: 6px;
     }
-    input[type="text"] {
+    input, button {
       width: 100%;
-      margin-bottom: 5px;
+      margin-top: 4px;
+      margin-bottom: 8px;
+      background: #333;
+      color: #fff;
+      border: 1px solid #444;
+      border-radius: 4px;
+      padding: 5px;
+    }
+    label {
+      font-size: 14px;
+    }
+    input[type="range"] {
+      width: 100%;
     }
   </style>
 </head>
 <body>
   <div id="controls">
-    <input type="file" id="pdbFile" /><br />
-
+    <input type="file" id="pdbFile" />
     <input type="text" id="pdbId" placeholder="Enter PDB ID (e.g. 1CRN)" />
-    <button onclick="loadPDBbyId()">Load by ID</button><br />
-
+    <button onclick="loadPDBbyId()">Load by ID</button>
     <input type="text" id="pdbUrl" placeholder="Paste raw PDB file URL here" />
-    <button onclick="loadPDBfromURL()">Load from URL</button><br />
-
-    <button onclick="exportSTL()">Export STL</button><br><br>
+    <button onclick="loadPDBfromURL()">Load from URL</button>
+    <button onclick="exportSTL()">Export STL</button>
 
     <label><input type="checkbox" id="showAtoms" checked> Show Atoms</label><br>
     <label><input type="checkbox" id="showBonds" checked> Show Bonds</label><br>
     <label><input type="checkbox" id="showRibbon" checked> Show Ribbon</label><br>
-    <label>Bond Distance: <input type="range" id="bondThreshold" min="1" max="2" step="0.1" value="1.6"></label><br>
+    <label>Bond Distance:
+      <input type="range" id="bondThreshold" min="1" max="2" step="0.1" value="1.6">
+    </label>
 
     <div id="instructions">
-      <strong>🧬 Raw PDB File Instructions:</strong><br>
-      Use only <em>raw direct links</em> to .pdb files.<br>
-      Example format:<br>
+      🧬 To load a file by ID, enter a valid PDB ID like <code>1CRN</code><br>
+      The raw URL format is:<br>
       <code>https://files.rcsb.org/view/XXXX.pdb</code><br>
-      Replace <code>XXXX</code> with a valid PDB ID like <code>1CRN</code> or <code>1MBN</code>.<br><br>
-      Or just enter the ID above and click <strong>"Load by ID"</strong> 😊
+      Replace <code>XXXX</code> with your PDB ID.
     </div>
   </div>
 
   <script>
-    function loadPDBbyId() {
-      const id = document.getElementById("pdbId").value.trim().toUpperCase();
-      if (!id || id.length !== 4) {
-        alert("Please enter a valid 4-letter PDB ID like '1CRN'.");
-        return;
+    let scene, camera, renderer, controls;
+    let atomMeshes = [], bondMeshes = [], ribbonMesh = null;
+    let currentAtoms = [];
+
+    init();
+
+    function init() {
+      scene = new THREE.Scene();
+      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
+      camera.position.z = 100;
+
+      renderer = new THREE.WebGLRenderer({ antialias: true });
+      renderer.setSize(window.innerWidth, window.innerHeight);
+      renderer.setClearColor(0x111111);
+      document.body.appendChild(renderer.domElement);
+
+      controls = new THREE.OrbitControls(camera, renderer.domElement);
+
+      addLights();
+      animate();
+
+      document.getElementById("pdbFile").addEventListener("change", function (event) {
+        const file = event.target.files[0];
+        const reader = new FileReader();
+        reader.onload = function (e) {
+          parsePDB(e.target.result);
+        };
+        reader.readAsText(file);
+      });
+
+      // UI change handlers
+      document.getElementById("showAtoms").onchange =
+      document.getElementById("showBonds").onchange =
+      document.getElementById("showRibbon").onchange =
+      document.getElementById("bondThreshold").oninput = renderStructure;
+    }
+
+    function animate() {
+      requestAnimationFrame(animate);
+      controls.update();
+      renderer.render(scene, camera);
+    }
+
+    function getColor(el) {
+      const colors = {
+        H: 0xffffff, C: 0xaaaaaa, O: 0xff0000, N: 0x00ccff,
+        S: 0xffff00, P: 0xff8000, Cl: 0x00ff00, F: 0x00ffff
+      };
+      return new THREE.Color(colors[el] || 0xff00ff);
+    }
+
+    function getRadius(el) {
+      const radii = {
+        H: 0.25, C: 0.7, N: 0.65, O: 0.6, S: 1.0, P: 1.1, Cl: 1.0, F: 0.5
+      };
+      return radii[el] || 0.8;
+    }
+
+    function parsePDB(text) {
+      scene.clear();
+      atomMeshes = []; bondMeshes = []; ribbonMesh = null; currentAtoms = [];
+
+      const lines = text.split("\\n");
+      for (const line of lines) {
+        if (line.startsWith("ATOM") || line.startsWith("HETATM")) {
+          const x = parseFloat(line.substring(30, 38));
+          const y = parseFloat(line.substring(38, 46));
+          const z = parseFloat(line.substring(46, 54));
+          const element = line.substring(76, 78).trim();
+          const name = line.substring(12, 16).trim();
+          currentAtoms.push({ x, y, z, element, name });
+        }
       }
-      const url = `https://files.rcsb.org/view/${id}.pdb`;
-      document.getElementById("pdbUrl").value = url;
-      loadPDBfromURL();
+
+      renderStructure();
+    }
+
+    function renderStructure() {
+      scene.clear();
+      addLights();
+      atomMeshes = [];
+      bondMeshes = [];
+
+      const showAtoms = document.getElementById("showAtoms").checked;
+      const showBonds = document.getElementById("showBonds").checked;
+      const showRibbon = document.getElementById("showRibbon").checked;
+      const bondThreshold = parseFloat(document.getElementById("bondThreshold").value);
+
+      if (showAtoms) {
+        for (const a of currentAtoms) {
+          const color = getColor(a.element);
+          const radius = getRadius(a.element);
+          const mat = new THREE.MeshPhongMaterial({ color });
+          const sphere = new THREE.Mesh(new THREE.SphereGeometry(radius, 16, 16), mat);
+          sphere.position.set(a.x, a.y, a.z);
+          scene.add(sphere);
+          atomMeshes.push(sphere);
+        }
+      }
+
+      if (showBonds) {
+        for (let i = 0; i < currentAtoms.length; i++) {
+          for (let j = i + 1; j < currentAtoms.length; j++) {
+            const a = currentAtoms[i], b = currentAtoms[j];
+            const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+            if (dist < bondThreshold) {
+              const mid = new THREE.Vector3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
+              const dir = new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z);
+              const length = dir.length();
+              const bond = new THREE.Mesh(
+                new THREE.CylinderGeometry(0.2, 0.2, length, 8),
+                new THREE.MeshPhongMaterial({ color: 0x999999 })
+              );
+              bond.position.copy(mid);
+              bond.lookAt(new THREE.Vector3(b.x, b.y, b.z));
+              bond.rotateX(Math.PI / 2);
+              scene.add(bond);
+              bondMeshes.push(bond);
+            }
+          }
+        }
+      }
+
+      if (showRibbon) {
+        const caAtoms = currentAtoms.filter(a => a.name === 'CA');
+        if (caAtoms.length >= 4) {
+          const points = caAtoms.map(a => new THREE.Vector3(a.x, a.y, a.z));
+          const curve = new THREE.CatmullRomCurve3(points);
+          const geometry = new THREE.TubeGeometry(curve, 100, 0.5, 8, false);
+          const mat = new THREE.MeshPhongMaterial({ color: 0xff66cc, transparent: true, opacity: 0.7 });
+          ribbonMesh = new THREE.Mesh(geometry, mat);
+          scene.add(ribbonMesh);
+        }
+      }
     }
 
     function loadPDBfromURL() {
@@ -80,6 +221,17 @@
         .catch(err => alert("Failed to load PDB: " + err));
     }
 
+    function loadPDBbyId() {
+      const id = document.getElementById("pdbId").value.trim().toUpperCase();
+      if (!id || id.length !== 4) {
+        alert("Please enter a valid 4-letter PDB ID like '1CRN'.");
+        return;
+      }
+      const url = `https://files.rcsb.org/view/${id}.pdb`;
+      document.getElementById("pdbUrl").value = url;
+      loadPDBfromURL();
+    }
+
     function exportSTL() {
       const exporter = new THREE.STLExporter();
       const stl = exporter.parse(scene);
@@ -90,9 +242,12 @@
       link.click();
     }
 
-    // Dummy functions — insert your existing 3D viewer JS here:
-    let scene = new THREE.Scene();
-    function parsePDB(text) { alert("PDB file loaded. (Add real 3D parsing here.)"); }
+    function addLights() {
+      scene.add(new THREE.AmbientLight(0x222222));
+      const directional = new THREE.DirectionalLight(0xffffff, 1.2);
+      directional.position.set(1, 1, 2);
+      scene.add(directional);
+    }
   </script>
 </body>
 </html>
