@@ -2,238 +2,398 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8" />
-  <title>Optimized PDB Viewer with Ribbon Thickness</title>
+  <title>Enhanced Protein Viewer</title>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/build/three.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/controls/OrbitControls.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/exporters/STLExporter.js"></script>
   <style>
     body { margin: 0; overflow: hidden; font-family: sans-serif; background: #111; color: #eee; }
-    #controls {
+    #ui-panel {
       position: absolute;
-      top: 10px; left: 10px;
-      background: rgba(0, 0, 0, 0.85);
-      padding: 12px;
-      border-radius: 8px;
+      top: 0; left: 0;
+      height: 100%;
+      width: 300px;
+      background: rgba(0, 0, 0, 0.95);
+      color: #fff;
+      padding: 20px;
+      box-sizing: border-box;
+      overflow-y: auto;
       z-index: 10;
-      width: 320px;
     }
-    input, button {
+    #ui-panel input, #ui-panel button, #ui-panel select {
       width: 100%;
       margin: 5px 0;
-      padding: 5px;
+      padding: 8px;
       background: #222;
       color: #fff;
-      border: 1px solid #333;
+      border: 1px solid #444;
       border-radius: 4px;
     }
-    label { font-size: 14px; display: block; margin-top: 5px; }
-    #loading {
+    #viewer {
       position: absolute;
-      top: 50%; left: 50%;
-      transform: translate(-50%, -50%);
+      left: 300px;
+      top: 0;
+      right: 0;
+      bottom: 0;
+    }
+    .tooltip {
+      position: absolute;
+      background: rgba(0,0,0,0.8);
       color: #fff;
-      font-size: 18px;
-      background: rgba(0,0,0,0.7);
-      padding: 10px 20px;
-      border-radius: 10px;
+      padding: 5px 10px;
+      border-radius: 4px;
+      font-size: 12px;
+      pointer-events: none;
       display: none;
       z-index: 20;
     }
   </style>
 </head>
 <body>
-  <div id="controls">
+  <div id="ui-panel">
+    <h2>Protein Viewer</h2>
+    <div style="background:#222; color:#fff; padding:10px; border-radius:6px; margin-bottom:15px; font-size:14px;">
+      <b>Instructions:</b><br>
+      • <b>Load a PDB file</b> from your computer or paste a URL (e.g., <span style="color:#8cf">https://files.rcsb.org/download/1CRN.pdb</span>).<br>
+      • Use the checkboxes and sliders to adjust the view.<br>
+      • Try <b>Presets</b> for quick styles.<br>
+      • <b>Export</b> your model as STL or PNG.<br>
+      • Use your mouse to rotate, zoom, and pan the 3D view.<br>
+      • Click <b>Reset View</b> if you get lost.
+    </div>
     <input type="file" id="pdbFile" />
     <input type="text" id="pdbUrl" placeholder="Paste PDB file URL here" />
     <button onclick="loadPDBfromURL()">Load from URL</button>
     <button onclick="exportSTL()">Export STL</button>
-    <label><input type="checkbox" id="performanceMode"> Performance Mode (CA atoms only)</label>
+    <label><input type="checkbox" id="performanceMode" checked> Performance Mode (CA atoms only)</label>
     <label><input type="checkbox" id="showAtoms" checked> Show Atoms</label>
     <label><input type="checkbox" id="showBonds" checked> Show Bonds</label>
     <label><input type="checkbox" id="showRibbon" checked> Show Ribbon</label>
     <label>Ribbon Thickness: <input type="range" id="ribbonThickness" min="0.1" max="2.0" step="0.1" value="0.5"></label>
     <label>Bond Distance: <input type="range" id="bondThreshold" min="1" max="2" step="0.1" value="1.6"></label>
+    <label>Color Scheme:
+      <select id="colorScheme">
+        <option value="element">By Element</option>
+        <option value="chain">By Chain</option>
+        <option value="residue">By Residue</option>
+      </select>
+    </label>
+    <label for="presetSelect">Presets:</label>
+    <select id="presetSelect">
+      <option value="">Custom</option>
+      <option value="cartoon">Cartoon</option>
+      <option value="ballstick">Ball-and-Stick</option>
+      <option value="backbone">Backbone Only</option>
+      <option value="publication">Publication Ready</option>
+    </select>
+    <button onclick="resetCamera()">Reset View</button>
+    <button onclick="captureImage()">Export Image</button>
+    <button onclick="resetDefaults()">Reset to Defaults</button>
   </div>
-  <div id="loading">Loading PDB file...</div>
+  <div id="viewer"></div>
+  <div id="tooltip" class="tooltip"></div>
 
   <script>
-    let scene, camera, renderer, controls;
-    let atomMeshes = [], bondMeshes = [], ribbonMesh = null;
-    let currentAtoms = [], caAtoms = [];
+let scene, camera, renderer, controls;
+let atoms = [];
+let caAtoms = [];
+let atomMeshes = [];
+let bondMeshes = [];
+let ribbonMesh = null;
 
-    init();
+function initViewer() {
+  const viewer = document.getElementById('viewer');
+  viewer.innerHTML = '';
+  scene = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(75, (window.innerWidth-300)/window.innerHeight, 0.1, 10000);
+  renderer = new THREE.WebGLRenderer({antialias: true});
+  renderer.setClearColor(0x111111);
+  renderer.setSize(window.innerWidth-300, window.innerHeight);
+  viewer.appendChild(renderer.domElement);
 
-    function init() {
-      scene = new THREE.Scene();
-      camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 2000);
-      camera.position.z = 100;
+  controls = new THREE.OrbitControls(camera, renderer.domElement);
+  camera.position.set(0, 0, 100);
+  controls.update();
 
-      renderer = new THREE.WebGLRenderer({ antialias: true });
-      renderer.setSize(window.innerWidth, window.innerHeight);
-      renderer.setClearColor(0x111111);
-      document.body.appendChild(renderer.domElement);
+  animate();
+}
 
-      controls = new THREE.OrbitControls(camera, renderer.domElement);
+function animate() {
+  requestAnimationFrame(animate);
+  renderer.render(scene, camera);
+}
 
-      window.addEventListener('resize', () => {
-        camera.aspect = window.innerWidth / window.innerHeight;
-        camera.updateProjectionMatrix();
-        renderer.setSize(window.innerWidth, window.innerHeight);
-      });
+function clearScene() {
+  atomMeshes.forEach(m => scene.remove(m));
+  bondMeshes.forEach(m => scene.remove(m));
+  if (ribbonMesh) scene.remove(ribbonMesh);
+  atomMeshes = [];
+  bondMeshes = [];
+  ribbonMesh = null;
+}
 
-      document.getElementById("pdbFile").addEventListener("change", function (event) {
-        const file = event.target.files[0];
-        const reader = new FileReader();
-        reader.onload = function (e) {
-          parsePDB(e.target.result);
-        };
-        reader.readAsText(file);
-      });
-
-      document.getElementById("showAtoms").onchange =
-      document.getElementById("showBonds").onchange =
-      document.getElementById("showRibbon").onchange =
-      document.getElementById("bondThreshold").oninput =
-      document.getElementById("ribbonThickness").oninput =
-      document.getElementById("performanceMode").onchange = renderStructure;
-
-      animate();
+function parseAndRenderPDB(pdbText) {
+  initViewer();
+  atoms = [];
+  caAtoms = [];
+  const atomColors = {
+    H: 0xffffff, C: 0xaaaaaa, N: 0x0000ff, O: 0xff0000, S: 0xffff00, P: 0xff8000
+  };
+  const lines = pdbText.split('\n');
+  for (const line of lines) {
+    if (line.startsWith('ATOM') || line.startsWith('HETATM')) {
+      const x = parseFloat(line.substr(30,8));
+      const y = parseFloat(line.substr(38,8));
+      const z = parseFloat(line.substr(46,8));
+      const element = line.substr(76,2).trim() || line.substr(12,2).trim();
+      const name = line.substr(12,4).trim();
+      const chain = line.substr(21,1);
+      const resSeq = parseInt(line.substr(22,4));
+      atoms.push({x, y, z, element, name, chain, resSeq});
+      if (name === "CA") {
+        caAtoms.push({x, y, z, element, name, chain, resSeq});
+      }
     }
+  }
+  // Center the molecule
+  const center = {x:0, y:0, z:0};
+  atoms.forEach(a => { center.x+=a.x; center.y+=a.y; center.z+=a.z; });
+  center.x /= atoms.length; center.y /= atoms.length; center.z /= atoms.length;
+  atoms.forEach(a => { a.x -= center.x; a.y -= center.y; a.z -= center.z; });
+  caAtoms.forEach(a => { a.x -= center.x; a.y -= center.y; a.z -= center.z; });
 
-    function animate() {
-      requestAnimationFrame(animate);
-      controls.update();
-      renderer.render(scene, camera);
+  renderAll();
+  // Add light
+  const light = new THREE.PointLight(0xffffff, 1);
+  light.position.set(50,50,100);
+  scene.add(light);
+  scene.add(new THREE.AmbientLight(0x404040));
+}
+
+function renderAll() {
+  clearScene();
+  const showAtoms = document.getElementById('showAtoms').checked;
+  const showBonds = document.getElementById('showBonds').checked;
+  const showRibbon = document.getElementById('showRibbon').checked;
+  const ribbonThickness = parseFloat(document.getElementById('ribbonThickness').value);
+  const bondThreshold = parseFloat(document.getElementById('bondThreshold').value);
+  const performanceMode = document.getElementById('performanceMode').checked;
+  const colorScheme = document.getElementById('colorScheme').value;
+
+  // Atoms
+  if (showAtoms) {
+    const atomList = performanceMode ? caAtoms : atoms;
+    for (const atom of atomList) {
+      let color = 0x00ff00;
+      if (colorScheme === 'element') {
+        const atomColors = { H: 0xffffff, C: 0xaaaaaa, N: 0x0000ff, O: 0xff0000, S: 0xffff00, P: 0xff8000 };
+        color = atomColors[atom.element] || 0x00ff00;
+      } else if (colorScheme === 'chain') {
+        // Assign color by chain
+        color = new THREE.Color().setHSL((atom.chain.charCodeAt(0) % 20) / 20, 0.7, 0.5).getHex();
+      } else if (colorScheme === 'residue') {
+        // Assign color by residue number
+        color = new THREE.Color().setHSL((atom.resSeq % 30) / 30, 0.7, 0.5).getHex();
+      }
+      const geometry = new THREE.SphereGeometry(1.2, 16, 16);
+      const material = new THREE.MeshPhongMaterial({color});
+      const sphere = new THREE.Mesh(geometry, material);
+      sphere.position.set(atom.x, atom.y, atom.z);
+      scene.add(sphere);
+      atomMeshes.push(sphere);
+
+      // Add tooltip data
+      sphere.userData.atom = atom;
     }
+  }
 
-    function getColorForElement(el) {
-      const colors = {
-        H: 0xffffff, C: 0xaaaaaa, O: 0xff0000, N: 0x00ccff,
-        S: 0xffff00, P: 0xff8000, Cl: 0x00ff00, F: 0x00ffff
-      };
-      return new THREE.Color(colors[el] || 0xff00ff);
-    }
-
-    function getAtomRadius(el) {
-      const radii = {
-        H: 0.25, C: 0.7, N: 0.65, O: 0.6, S: 1.0, P: 1.1, Cl: 1.0, F: 0.5
-      };
-      return radii[el] || 0.8;
-    }
-
-    function parsePDB(text) {
-      document.getElementById("loading").style.display = "block";
-      scene.clear();
-      atomMeshes = []; bondMeshes = []; ribbonMesh = null;
-      currentAtoms = []; caAtoms = [];
-
-      const lines = text.split('\n');
-      for (const line of lines) {
-        if (line.startsWith("ATOM") || line.startsWith("HETATM")) {
-          const x = parseFloat(line.substring(30, 38));
-          const y = parseFloat(line.substring(38, 46));
-          const z = parseFloat(line.substring(46, 54));
-          const element = line.substring(76, 78).trim();
-          const name = line.substring(12, 16).trim();
-          const resSeq = line.substring(22, 26).trim();
-          const atom = { x, y, z, element, name, resSeq };
-          currentAtoms.push(atom);
-          if (name === "CA") caAtoms.push(atom);
+  // Bonds
+  if (showBonds) {
+    const atomList = performanceMode ? caAtoms : atoms;
+    for (let i = 0; i < atomList.length; i++) {
+      for (let j = i+1; j < atomList.length; j++) {
+        const a = atomList[i], b = atomList[j];
+        const dx = a.x-b.x, dy = a.y-b.y, dz = a.z-b.z;
+        const dist = Math.sqrt(dx*dx + dy*dy + dz*dz);
+        if (dist < bondThreshold && dist > 0.1) {
+          const bondGeom = new THREE.CylinderGeometry(0.3, 0.3, dist, 8);
+          const bondMat = new THREE.MeshPhongMaterial({color: 0x888888});
+          const bond = new THREE.Mesh(bondGeom, bondMat);
+          // Position bond between atoms
+          bond.position.set((a.x+b.x)/2, (a.y+b.y)/2, (a.z+b.z)/2);
+          // Orient bond
+          bond.lookAt(new THREE.Vector3(a.x, a.y, a.z));
+          bond.rotateX(Math.PI/2);
+          scene.add(bond);
+          bondMeshes.push(bond);
         }
       }
-
-      if (currentAtoms.length > 50000) alert("⚠️ This is a large file and may cause lag.");
-      renderStructure();
-      document.getElementById("loading").style.display = "none";
     }
+  }
 
-    function renderStructure() {
-      scene.clear();
-      atomMeshes = []; bondMeshes = []; ribbonMesh = null;
+  // Ribbon (simple tube through CA atoms)
+  if (showRibbon && caAtoms.length > 3) {
+    const curve = new THREE.CatmullRomCurve3(caAtoms.map(a => new THREE.Vector3(a.x, a.y, a.z)));
+    const geometry = new THREE.TubeGeometry(curve, caAtoms.length*2, ribbonThickness, 8, false);
+    const material = new THREE.MeshPhongMaterial({color: 0x00ffff, opacity: 0.7, transparent: true});
+    ribbonMesh = new THREE.Mesh(geometry, material);
+    scene.add(ribbonMesh);
+  }
+}
 
-      const usePerf = document.getElementById("performanceMode").checked;
-      const showAtoms = document.getElementById("showAtoms").checked;
-      const showBonds = document.getElementById("showBonds").checked;
-      const showRibbon = document.getElementById("showRibbon").checked;
-      const bondThreshold = parseFloat(document.getElementById("bondThreshold").value);
-      const ribbonThickness = parseFloat(document.getElementById("ribbonThickness").value);
-      const atoms = usePerf ? caAtoms : currentAtoms;
+// UI event listeners
+document.getElementById('showAtoms').addEventListener('change', renderAll);
+document.getElementById('showBonds').addEventListener('change', renderAll);
+document.getElementById('showRibbon').addEventListener('change', renderAll);
+document.getElementById('ribbonThickness').addEventListener('input', renderAll);
+document.getElementById('bondThreshold').addEventListener('input', renderAll);
+document.getElementById('performanceMode').addEventListener('change', renderAll);
+document.getElementById('colorScheme').addEventListener('change', renderAll);
+document.getElementById('presetSelect').addEventListener('change', function() {
+  const preset = this.value;
+  switch (preset) {
+    case 'cartoon':
+      document.getElementById('showAtoms').checked = false;
+      document.getElementById('showBonds').checked = false;
+      document.getElementById('showRibbon').checked = true;
+      document.getElementById('ribbonThickness').value = 0.6;
+      document.getElementById('colorScheme').value = 'chain';
+      break;
+    case 'ballstick':
+      document.getElementById('showAtoms').checked = true;
+      document.getElementById('showBonds').checked = true;
+      document.getElementById('showRibbon').checked = false;
+      document.getElementById('ribbonThickness').value = 0.2;
+      document.getElementById('colorScheme').value = 'element';
+      break;
+    case 'backbone':
+      document.getElementById('showAtoms').checked = false;
+      document.getElementById('showBonds').checked = false;
+      document.getElementById('showRibbon').checked = true;
+      document.getElementById('ribbonThickness').value = 0.2;
+      document.getElementById('colorScheme').value = 'residue';
+      break;
+    case 'publication':
+      document.getElementById('showAtoms').checked = true;
+      document.getElementById('showBonds').checked = false;
+      document.getElementById('showRibbon').checked = true;
+      document.getElementById('ribbonThickness').value = 0.4;
+      document.getElementById('colorScheme').value = 'chain';
+      break;
+    default:
+      // Custom: do nothing
+      break;
+  }
+  renderAll();
+});
 
-      if (showAtoms) {
-        const geometry = new THREE.SphereGeometry(0.5, 8, 8);
-        atoms.forEach(a => {
-          const mat = new THREE.MeshPhongMaterial({ color: getColorForElement(a.element) });
-          const sphere = new THREE.Mesh(geometry, mat);
-          sphere.position.set(a.x, a.y, a.z);
-          scene.add(sphere);
-          atomMeshes.push(sphere);
-        });
-      }
+// Override your loadPDBfromURL to call the parser
+async function loadPDBfromURL() {
+  const url = document.getElementById('pdbUrl').value.trim();
+  if (!url) {
+    alert('Please enter a PDB file URL.');
+    return;
+  }
+  try {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error('Network response was not ok');
+    const pdbText = await response.text();
+    parseAndRenderPDB(pdbText);
+  } catch (err) {
+    alert('Failed to load PDB file: ' + err.message);
+  }
+}
 
-      if (!usePerf && showBonds) {
-        for (let i = 0; i < atoms.length; i++) {
-          for (let j = i + 1; j < atoms.length; j++) {
-            const a = atoms[i], b = atoms[j];
-            const dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
-            const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
-            if (dist < bondThreshold) {
-              const mid = new THREE.Vector3((a.x + b.x) / 2, (a.y + b.y) / 2, (a.z + b.z) / 2);
-              const dir = new THREE.Vector3(b.x - a.x, b.y - a.y, b.z - a.z);
-              const length = dir.length();
-              const bond = new THREE.Mesh(
-                new THREE.CylinderGeometry(0.2, 0.2, length, 8),
-                new THREE.MeshPhongMaterial({ color: 0x999999 })
-              );
-              bond.position.copy(mid);
-              bond.lookAt(new THREE.Vector3(b.x, b.y, b.z));
-              bond.rotateX(Math.PI / 2);
-              scene.add(bond);
-              bondMeshes.push(bond);
-            }
-          }
-        }
-      }
+function exportSTL() {
+  // Combine all meshes to export: atoms, bonds, ribbon
+  const exporter = new THREE.STLExporter();
+  const group = new THREE.Group();
+  atomMeshes.forEach(m => group.add(m.clone()));
+  bondMeshes.forEach(m => group.add(m.clone()));
+  if (ribbonMesh) group.add(ribbonMesh.clone());
+  const stlString = exporter.parse(group);
+  const blob = new Blob([stlString], {type: 'application/sla'});
+  const link = document.createElement('a');
+  link.href = URL.createObjectURL(blob);
+  link.download = 'protein.stl';
+  link.click();
+}
 
-      if (showRibbon && caAtoms.length >= 4) {
-        const points = caAtoms.map(a => new THREE.Vector3(a.x, a.y, a.z));
-        const curve = new THREE.CatmullRomCurve3(points);
-        const geometry = new THREE.TubeGeometry(curve, 100, ribbonThickness, 8, false);
-        const material = new THREE.MeshPhongMaterial({ color: 0xff66cc, opacity: 0.7, transparent: true });
-        ribbonMesh = new THREE.Mesh(geometry, material);
-        scene.add(ribbonMesh);
-      }
+function captureImage() {
+  if (!renderer) return;
+  renderer.render(scene, camera); // Ensure latest frame
+  const dataURL = renderer.domElement.toDataURL('image/png');
+  const link = document.createElement('a');
+  link.href = dataURL;
+  link.download = 'protein_view.png';
+  link.click();
+}
 
-      addLights();
-    }
+function resetCamera() {
+  if (!camera || !controls) return;
+  camera.position.set(0, 0, 100);
+  controls.target.set(0, 0, 0);
+  controls.update();
+}
 
-    function addLights() {
-      scene.add(new THREE.AmbientLight(0x404040));
-      const directional = new THREE.DirectionalLight(0xffffff, 1);
-      directional.position.set(1, 1, 1).normalize();
-      scene.add(directional);
-    }
+function resetDefaults() {
+  document.getElementById('performanceMode').checked = true;
+  document.getElementById('showAtoms').checked = true;
+  document.getElementById('showBonds').checked = true;
+  document.getElementById('showRibbon').checked = true;
+  document.getElementById('ribbonThickness').value = 0.5;
+  document.getElementById('bondThreshold').value = 1.6;
+  document.getElementById('colorScheme').value = 'element';
+  document.getElementById('presetSelect').value = '';
+  resetCamera();
+  renderAll();
+}
 
-    function loadPDBfromURL() {
-      const url = document.getElementById("pdbUrl").value;
-      document.getElementById("loading").style.display = "block";
-      fetch(url)
-        .then(res => res.text())
-        .then(text => parsePDB(text))
-        .catch(err => {
-          alert("Failed to load PDB: " + err);
-          document.getElementById("loading").style.display = "none";
-        });
-    }
+// Initialize viewer on page load
+window.addEventListener('DOMContentLoaded', () => {
+  initViewer();
+});
 
-    function exportSTL() {
-      const exporter = new THREE.STLExporter();
-      const stl = exporter.parse(scene);
-      const blob = new Blob([stl], { type: 'text/plain' });
-      const link = document.createElement('a');
-      link.href = URL.createObjectURL(blob);
-      link.download = 'protein_model.stl';
-      link.click();
-    }
+document.getElementById('pdbFile').addEventListener('change', function(event) {
+  const file = event.target.files[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.onload = function(e) {
+    parseAndRenderPDB(e.target.result);
+  };
+  reader.readAsText(file);
+});
+
+// Tooltip handling
+const tooltip = document.getElementById('tooltip');
+renderer.domElement.addEventListener('mousemove', onMouseMove);
+
+function onMouseMove(event) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const mouse = {
+    x: ((event.clientX - rect.left) / rect.width) * 2 - 1,
+    y: -((event.clientY - rect.top) / rect.height) * 2 + 1
+  };
+  const raycaster = new THREE.Raycaster();
+  raycaster.setFromCamera(mouse, camera);
+  const intersects = raycaster.intersectObjects(atomMeshes);
+  if (intersects.length > 0) {
+    const mesh = intersects[0].object;
+    const atom = mesh.userData.atom;
+    tooltip.style.display = 'block';
+    tooltip.style.left = event.clientX + 10 + 'px';
+    tooltip.style.top = event.clientY + 10 + 'px';
+    tooltip.innerHTML = `
+      <b>${atom.element}</b> (${atom.name})<br>
+      Residue: ${atom.resSeq} Chain: ${atom.chain}<br>
+      x: ${atom.x.toFixed(2)}<br>
+      y: ${atom.y.toFixed(2)}<br>
+      z: ${atom.z.toFixed(2)}
+    `;
+  } else {
+    tooltip.style.display = 'none';
+  }
+}
   </script>
 </body>
 </html>
