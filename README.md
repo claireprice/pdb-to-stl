@@ -29,6 +29,8 @@ The exported `.stl` file is compatible with most slicing software (e.g., Cura, P
 
 If you use this viewer or export models for publication or presentation, please cite:
 
+Price, C. L. (2025). Enhanced Protein Viewer (1.0.0). Zenodo. https://doi.org/10.5281/zenodo.15705521 
+
 
 ## License
 
