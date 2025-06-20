@@ -1,0 +1,16 @@
+{
+  "title": "Enhanced Protein Viewer",
+  "creators": [
+    {
+      "name": "Price, Claire L.",
+      "affiliation": "Swansea University Medical School, Singleton Park, Swansea SA2 8PP UK",
+      "orcid": "https://orcid.org/0000-0002-6045-4835"
+    }
+  ],
+  "description": "A browser-based 3D protein structure viewer using Three.js. Supports interactive visualization of PDB files with customizable styles, tooltip inspection, and export of models as STL for 3D printing or PNG for publication. Designed for researchers, educators, and science communicators.",
+  "license": "CC-BY-NC-4.0",
+  "keywords": ["protein", "PDB", "3D visualization", "Three.js", "bioinformatics", "STL", "3D printing", "molecular modeling"],
+  "upload_type": "software",
+  "version": "1.0.0",
+  "publication_date": "2025-06-20"
+}
